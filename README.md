@@ -1,125 +1,182 @@
-# CamDirector — AI Match Storytelling & Telemetry Engine
+# ⚽ Football AI Broadcast Director & Web Platform
 
-An intelligent multi-camera broadcast director and video telemetry pipeline for live football.
+> Autonomous AI Camera Director, Continuous Panoramic Tracking, and Clean Live Broadcasting Engine for Football.
 
----
-
-## The Core Problem
-
-Following the story of a football match the way a human director does has no off-the-shelf solution. 
-The system depends on generating a **real-time description of every camera feed (~1 Hz)**:
-1. **Shot classification**: Tactical wide, medium play, tight close-up, crowd, bench/coach, replay.
-2. **High-recall ball tracking**: Overcoming the 4/10 frame detection drop in standard football models.
-3. **Play kinematics & tempo**: Speed of play, pressing intensity, counter-attack velocity.
-4. **Entity awareness**: Ball carrier, sprint leaders, referees, team formations.
-5. **Streaming event detection**: Real-time goals, fouls/tackles, shots on target, and celebrations.
-
-With structured per-camera telemetry, choosing the best camera for narrative impact becomes deterministic and straightforward.
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
+[![YOLOv8](https://img.shields.io/badge/Ultralytics-YOLOv8-yellow.svg)](https://github.com/ultralytics/ultralytics)
+[![OpenCV](https://img.shields.io/badge/OpenCV-4.8+-red.svg)](https://opencv.org)
 
 ---
 
-## 1. High-Recall Ball Tracker (`ball_tracker/`)
+## 📖 Overview
 
-Open models miss the football in ~6 out of 10 frames due to extreme downscaling (a 18px ball downscales to 4px in standard 640x640 YOLO), motion blur, and leg occlusions.
+**Football AI Director** transforms broadcast football and ultra-wide stadium video into professional television-grade productions in real-time.
 
-`HighRecallBallTracker` solves this using a 3-layer hybrid architecture:
+Traditional camera switching across multiple cameras creates coordinate jumps, track ID loss, and false event alerts. By leveraging continuous **panoramic stadium video** (`2880×720` / `3840×960`), this platform tracks all 22 players, referees, and the ball across a **single unified pitch coordinate space**. 
 
-| Component | Responsibility | Impact |
+An autonomous **Virtual PTZ Broadcast Camera** smoothly pans and zooms across the stadium to follow attacking play, while generating **100% clean video streams** (free of bounding boxes, lines, or debug watermarks) ready for television broadcast and OBS Studio.
+
+---
+
+## 🌟 Key Features
+
+* **🎥 AI Broadcast Virtual Camera**: Dynamically crops and frames a smooth `16:9` (`1080p`) television broadcast from the wide stadium panorama, with deadband damping, velocity look-ahead, and celebration zoom.
+* **🏟️ Unified Panoramic Pitch Tracking**: Continuous $x \in [0, 2880]$ coordinate tracking eliminates multi-camera seam artifacts, ball coordinate jumps, and track resets.
+* **✨ Clean Live Video Feeds**: Zero bounding boxes, `#ID` labels, trajectory lines, or debug watermarks in the live stream outputs.
+* **🥅 Accurate Event Detectors**:
+  * **Goals**: Pinned to the actual physical stadium goal mouths ($x < 190\text{px}$ and $x > 2690\text{px}$) with inward trajectory validation, completely eliminating false midfield goals.
+  * **Fouls & Tackles**: Evaluates player-player collision proximity and physical ground tumbles in unified pitch coordinates without edge-cut false alarms.
+* **🎛️ Web Studio & Multiview Switcher Desk**: Real-time browser control room with Program Monitor, 6-camera multiview wall, interactive switcher bus, PTZ controls, and live match radar.
+* **📺 Dedicated Television Monitor (`/tv`)**: Fullscreen broadcast monitor with TV scoreboard bug, lower-third alert toasts, and instant toggle between TV Program and 100% Clean OBS Feed.
+
+---
+
+## 🚀 Quickstart: Running the Web Platform
+
+### 1. Installation
+
+Ensure you have Python 3.9+ installed, then install dependencies:
+
+```bash
+# Clone the repository
+git clone https://github.com/rishab-iocod/football-ai-director.git
+cd football-ai-director
+
+# Set up virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install fastapi uvicorn websockets opencv-python ultralytics supervision numpy scipy
+```
+
+### 2. Start the Broadcast Studio Server
+
+Run the web platform server from the repository root:
+
+```bash
+python cam_director/web_platform/server.py
+```
+
+*The server will start at `http://0.0.0.0:8088` and automatically initialize on the default panoramic stadium feed.*
+
+### 3. Open in Your Browser
+
+| Interface | URL | Description |
 |---|---|---|
-| `TemporalRoICropper` | Extracts a $288\text{px}$ native-resolution patch around predicted trajectory | Preserves optical ball details without downscaling |
-| `TrajectoryValidator` | Kinematic acceleration & aspect ratio gating | Filters false positives on white socks, sponsor logos, grass marks |
-| `PhysicsBallKalman` | 6D physical Kalman filter with image-space gravity & aerodynamic drag | Bridges 1–12 frame gaps along physical parabolic flight arcs |
+| **Web Studio Control Room** | [http://localhost:8088](http://localhost:8088) | Multi-camera switcher desk, PTZ controls, 2D radar, telemetry |
+| **Fullscreen TV / OBS Monitor** | [http://localhost:8088/tv](http://localhost:8088/tv) | Fullscreen broadcast output with scoreboard bug & OBS URL copy |
 
-### Benchmark Results on Broadcast Footage (`data/test.mp4`)
+---
+
+## 📡 Live Stream Endpoints (MJPEG)
+
+Every stream output is available as a standard MJPEG endpoint compatible with **OBS Studio**, **VLC**, and web browsers:
+
+| Stream Endpoint | Aspect / Res | Description |
+|---|---|---|
+| `http://localhost:8088/stream/tv` | 16:9 (`1920×1080`) | Main Program Broadcast feed with top-left TV scoreboard bug |
+| `http://localhost:8088/stream/clean` | 16:9 (`1920×1080`) | **100% Clean Feed** — pristine raw video with zero graphics (for external graphics engines / OBS) |
+| `http://localhost:8088/stream/panoramic` | 4:1 (`1920×480`) | Full Stadium Overview — continuous raw panoramic view of the entire pitch |
+| `http://localhost:8088/stream/ball_focus` | 16:9 (`1280×720`) | Dynamic camera locked onto the ball |
+| `http://localhost:8088/stream/player_focus` | 16:9 (`1280×720`) | Dynamic camera tracking the active hero player / ball carrier |
+| `http://localhost:8088/stream/cam1` | 4:3 (`960×720`) | Raw Left Wing / Penalty Box sector |
+| `http://localhost:8088/stream/cam2` | 4:3 (`960×720`) | Raw Center Midfield sector |
+| `http://localhost:8088/stream/cam3` | 4:3 (`960×720`) | Raw Right Wing / Penalty Box sector |
+| `http://localhost:8088/stream/roi_patch` | 1:1 (`240×240`) | High-resolution Temporal RoI patch around the ball |
+
+### Adding to OBS Studio
+1. In OBS Studio, add a **Media Source** or **Browser Source**.
+2. Set the URL to `http://localhost:8088/stream/tv` (with scoreboard) or `http://localhost:8088/stream/clean` (for custom lower-thirds).
+3. The stream will play with low latency at native 25 FPS.
+
+---
+
+## ⌨️ Operator Controls & Keyboard Hotkeys
+
+### In the Web Studio (`/`)
+* **`A`**: AI Auto Director (Autonomous virtual camera tracking)
+* **`0` or `W`**: Cut to Full Stadium Panorama
+* **`1`**: Cut to Left Wing (Cam 1)
+* **`2`**: Cut to Center Midfield (Cam 2)
+* **`3`**: Cut to Right Wing (Cam 3)
+* **`B`**: Lock onto Ball Focus
+* **`P`**: Lock onto Hero Player Focus
+* **`Space`**: Pause / Resume match playback
+
+### In the TV Broadcast Monitor (`/tv`)
+* **`F`**: Toggle Fullscreen
+* **`C`**: Instant toggle between TV Program Feed (with scoreboard) and Clean Feed (no graphics)
+* **`1`, `2`, `3`**: Cut to Cam 1, Cam 2, Cam 3
+* **`B`**: Ball Lock
+* **`P`**: Hero Player Lock
+* **`A`**: AI Auto Director
+* **`H`**: Hide / Show floating toolbar
+
+---
+
+## ⚙️ Architecture & Data Flow
 
 ```
-=================================================================
-BENCHMARK RESULTS & RECALL COMPARISON
-=================================================================
-Total Frames Analyzed:        80
------------------------------------------------------------------
-Standard YOLO Hits:           28 / 80 (35.0% recall)
-Hybrid Tracker Coverage:      73 / 80 (91.2% continuous coverage)
-  • Direct Patch/Global hits: 28 frames
-  • Physics flight bridged:   45 frames
------------------------------------------------------------------
-Detection Source Breakdown:
-  - lost                    : 7 frames (8.8%)
-  - global_frame            : 5 frames (6.2%)
-  - temporal_roi_patch      : 23 frames (28.7%)
-  - physics_extrapolated    : 45 frames (56.2%)
-=================================================================
+Raw Stadium Panorama (2880×720 @ 25 FPS)
+  │
+  ├── Unified Pitch Tracking (Ball & 22 Players in x ∈ [0, 2880])
+  │     ├── Continuous Kalman Ball Filter (Index 0)
+  │     └── Team Possession Assignment
+  │
+  ├── Real-Time Event Detection
+  │     ├── GoalDetector (Left: x < 190, Right: x > 2690 + Inward Velocity)
+  │     └── FoulDetector (Player-to-Player Proximity + Tumble Kinematics)
+  │
+  ├── Virtual PTZ Broadcast Camera
+  │     ├── Smooth EMA & Lead Look-Ahead Kinematics
+  │     ├── 16:9 Aspect Cropping (1280×720 window inside 2880×720)
+  │     └── Resizing to 1920×1080 (Zero Distortion)
+  │
+  └── Multi-Channel Frame Dispatch
+        ├── /stream/tv       (1080p + TV Scoreboard Bug)
+        ├── /stream/clean    (1080p 100% Clean)
+        ├── /stream/panoramic(Full Stadium Pitch)
+        └── /stream/ball_focus & /stream/player_focus
 ```
 
 ---
 
-## 2. Real-Time Camera Feed Telemetry Schema (`descriptor/`)
+## 🔬 Running CLI Tools & Benchmarks
 
-Defines [`CameraFeedTelemetry`](cam_director/descriptor/schema.py), the standardized ~1 Hz JSON descriptor emitted per camera feed:
-
-```json
-{
-  "camera_id": "cam_01_high_center",
-  "timestamp": 1728472910.42,
-  "frame_index": 340,
-  "shot_type": "WIDE_TACTICAL",
-  "shot_confidence": 0.94,
-  "camera_motion": "SMOOTH_PAN",
-  "ball_visible": true,
-  "ball_coords_norm": [0.54, 0.61],
-  "ball_speed_px_f": 18.4,
-  "ball_trajectory_status": "AIRBORNE_SHOT",
-  "play_tempo": "HIGH_COUNTER",
-  "attacking_speed_kmh": 26.8,
-  "player_count": 14,
-  "ball_carrier_id": "10",
-  "is_referee_in_focus": false,
-  "team_in_possession": 1,
-  "event_type": "SHOT_ON_TARGET",
-  "event_confidence": 0.88
-}
-```
-
----
-
-## Quickstart
-
-### Option A: Watch Real-Time Live Video Tracking (Interactive Window)
-
-Watch the tracking engine follow the ball live on screen with a continuous physics trail, velocity arrows, and a high-resolution RoI zoom Picture-in-Picture window:
+### 1. High-Recall Ball Tracker Interactive Demo
+Follow the ball live on screen with a continuous physics trail, velocity vectors, and high-resolution RoI zoom window:
 
 ```bash
-# 1. Real-time 24/7 sports broadcast feed
+# Test on a recorded video
+python cam_director/scripts/live_tracker.py --source data/test.mp4 --device mps
+
+# Test on live 24/7 sports broadcast stream (HLS)
 python cam_director/scripts/live_tracker.py --source aspor --device mps
-
-# 2. Or using public broadcast feed (RTVE)
-python cam_director/scripts/live_tracker.py --source rtve --device mps
-
-# 3. Or using any custom HLS (.m3u8), RTSP, or webcam stream
-python cam_director/scripts/live_tracker.py --source "https://YOUR_STREAM_URL.m3u8" --device mps
 ```
 
-> **Interactive Hotkeys in Preview Window:**
-> * Press **`q`** or **`ESC`**: Quit
-> * Press **`p`**: Toggle the high-resolution Temporal RoI Zoom PiP on/off
-> * Press **`s`**: Save an instant full-resolution snapshot
-
----
-
-### Option B: Test with the Longer Recorded Match Video (`data/match_sample_long.mp4`)
-
-We captured a new, longer 1080p match video (`40 MB`, 600 frames) in `data/match_sample_long.mp4`:
+### 2. Ball Tracker Benchmark
+Evaluate ball detection recall, physics Kalman bridging, and latency metrics:
 
 ```bash
-# Run interactive visual tracker on the long match recording
-python cam_director/scripts/live_tracker.py --source data/match_sample_long.mp4 --device mps
-
-# Or run the benchmark metrics and save annotated output
 python cam_director/scripts/bench_ball_tracker.py \
-    --video data/match_sample_long.mp4 \
+    --video data/test.mp4 \
     --model models/best.pt \
     --device mps \
     --max-frames 300 \
-    --save output_videos/ball_tracker_long_demo.avi
+    --save output_videos/ball_tracker_demo.avi
 ```
 
+### 3. Offline Analysis Batch Pipeline
+Run full batch YOLO detection, ByteTrack, camera motion estimation, field perspective homography, and speed/distance calculation:
+
+```bash
+python main.py
+```
+*Output will be saved to `output_videos/output_video.avi`.*
+
+---
+
+## 📄 License
+This project is licensed under the MIT License.
