@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DIRECTOR PRO // Football AI Broadcast & Tracking Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="broadcast-body">
+  <!-- Top Navigation & Broadcast Control Bar -->
+  <header class="top-bar">
+    <div class="brand-group">
+      <div class="brand-badge">
+        <span class="live-dot pulse-red"></span>
+        <span class="brand-text">DIRECTOR PRO</span>
+        <span class="brand-sub">AI STUDIO</span>
+      </div>
+      <div class="stream-source-picker">
+        <label for="sourceSelect" class="source-label">FEED:</label>
+        <select id="sourceSelect" class="source-dropdown">
+          <option value="panoramic_director">🏟️ Raw Panoramic Stadium (2880x720)</option>
+          <option value="panoramic_4k">🌐 Raw 4K Ultra-Wide (3840x960)</option>
+          <option value="multi_cams">🎥 Multi-Camera Match (Cam 1, 2, 3)</option>
+          <option value="match_sample_long">📹 Match Recording (1080p 600f)</option>
+          <option value="test_broadcast">📺 Broadcast Test Clip (1080p 750f)</option>
+          <option value="program_clip">🎥 Program Reference Clip</option>
+          <option value="aspor_live">📡 A Spor Live HD (Stream)</option>
+          <option value="rtve_live">📡 RTVE La 1 (Live Feed)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Live Match Scoreboard -->
+    <div class="match-scoreboard">
+      <div class="team-capsule home">
+        <span class="team-dot home-dot"></span>
+        <span class="team-name">HOME</span>
+        <span class="score-digit" id="scoreHome">0</span>
+      </div>
+      <div class="score-separator">:</div>
+      <div class="team-capsule away">
+        <span class="score-digit" id="scoreAway">0</span>
+        <span class="team-name">AWAY</span>
+        <span class="team-dot away-dot"></span>
+      </div>
+      <div class="match-timer">
+        <span class="time-clock" id="matchClock">00:00</span>
+        <span class="frame-counter" id="frameCounter">F#0</span>
+      </div>
+    </div>
+
+    <!-- Playback Transport & Telemetry Badges -->
+    <div class="transport-group">
+      <div class="transport-buttons">
+        <button id="btnPlay" class="btn-ctrl active" title="Play / Resume">▶</button>
+        <button id="btnPause" class="btn-ctrl" title="Pause">⏸</button>
+        <button id="btnStop" class="btn-ctrl" title="Reset / Rewind">⏮</button>
+      </div>
+      <div class="speed-selector">
+        <button class="speed-btn" data-speed="0.5">0.5x</button>
+        <button class="speed-btn active" data-speed="1.0">1.0x</button>
+        <button class="speed-btn" data-speed="2.0">2.0x</button>
+      </div>
+      <div class="fps-badge">
+        <span class="fps-val" id="engineFps">25.0</span>
+        <span class="fps-unit">FPS</span>
+      </div>
+      <a href="/tv" target="_blank" class="btn-tv-launch" title="Open Fullscreen 1080p TV Broadcast & OBS Feed">📺 TV / Stream Out</a>
+    </div>
+  </header>
+
+  <!-- Main Broadcast Studio Grid -->
+  <main class="studio-grid">
+    <!-- Left Column: Primary Program Monitor & Multiview Desk -->
+    <section class="stage-column">
+      <!-- Program Output Monitor -->
+      <div class="monitor-card program-monitor">
+        <div class="monitor-header">
+          <div class="tally-indicator" id="programTally">
+            <span class="tally-box red-tally">ON-AIR</span>
+            <span class="cam-title" id="onAirCamTitle">CAM 2 • WIDE TACTICAL</span>
+          </div>
+          <div class="monitor-meta">
+            <span class="meta-tag" id="directorPolicyBadge">AUTO AI DIRECTOR</span>
+            <span class="meta-tag" id="ptzZoomBadge">ZOOM: 1.0x</span>
+            <button id="btnTogglePip" class="btn-icon" title="Toggle Temporal RoI Zoom">🔍 RoI PiP</button>
+          </div>
+        </div>
+
+        <div class="viewport-wrapper" id="programViewport">
+          <img id="programFeedImg" src="/stream/program" alt="Program Stream" class="broadcast-stream-img">
+          
+          <!-- Draggable / Floating Temporal RoI Patch PiP -->
+          <div class="pip-overlay" id="pipOverlay">
+            <div class="pip-header">
+              <span>TEMPORAL RoI ZOOM</span>
+              <span class="pip-res">288px Native</span>
+            </div>
+            <img id="roiPatchImg" src="/stream/roi_patch" alt="RoI Patch" class="pip-img">
+          </div>
+
+          <!-- Dynamic Broadcast Alert Toast -->
+          <div class="broadcast-toast" id="broadcastToast">
+            <div class="toast-badge" id="toastBadge">GOAL!</div>
+            <div class="toast-text" id="toastText">Spectacular finish!</div>
+          </div>
+        </div>
+
+        <!-- Real-Time Director Decision Reason Bar -->
+        <div class="decision-banner" id="decisionBanner">
+          <div class="decision-left">
+            <span class="decision-pulse"></span>
+            <span class="decision-label">DIRECTOR POLICY:</span>
+            <span class="decision-text" id="decisionText">Cam 2 live — Center Midfield coverage</span>
+          </div>
+          <div class="decision-scores" id="decisionScores">
+            <span class="score-pill" id="scorePillCam1">Cam 1: 0.0</span>
+            <span class="score-pill active" id="scorePillCam2">Cam 2: 115.4</span>
+            <span class="score-pill" id="scorePillCam3">Cam 3: 0.0</span>
+          </div>
+        </div>
+
+        <!-- Quick Event Simulator Bar -->
+        <div class="quick-sim-bar">
+          <div class="sim-label">SIMULATE EVENT:</div>
+          <button id="btnTriggerGoalHome" class="btn-event goal">⚽ Goal Home</button>
+          <button id="btnTriggerGoalAway" class="btn-event goal">⚽ Goal Away</button>
+          <button id="btnTriggerTacticalFoul" class="btn-event foul">🟨 Tactical Foul</button>
+          <button id="btnTriggerHardTackle" class="btn-event foul">🟥 Hard Tackle</button>
+          <button id="btnOpenGuide" class="btn-event guide">📖 Settings & Guide</button>
+        </div>
+      </div>
+
+      <!-- Multiview Camera Switching Wall -->
+      <div class="multiview-card">
+        <div class="section-title-row">
+          <h2 class="section-title">MULTIVIEW SWITCHER DESK</h2>
+          <span class="section-sub">Click any camera to instantly cut On-Air</span>
+        </div>
+
+        <div class="cams-tiles-grid" id="camsGrid">
+          <!-- Cam 1: Left Wing -->
+          <div class="cam-tile" id="tileCam1" data-cam="cam1">
+            <div class="tile-header">
+              <span class="tile-tally" id="tallyCam1">CAM 1</span>
+              <span class="tile-label">LEFT WING</span>
+              <span class="tile-score" id="scoreCam1">SC: 0</span>
+            </div>
+            <div class="tile-stream-box">
+              <img src="/stream/cam1" alt="Cam 1" class="tile-img" loading="lazy">
+            </div>
+          </div>
+
+          <!-- Cam 2: Center Midfield -->
+          <div class="cam-tile active-live" id="tileCam2" data-cam="cam2">
+            <div class="tile-header">
+              <span class="tile-tally" id="tallyCam2">CAM 2</span>
+              <span class="tile-label">CENTER MIDFIELD</span>
+              <span class="tile-score" id="scoreCam2">SC: 100</span>
+            </div>
+            <div class="tile-stream-box">
+              <img src="/stream/cam2" alt="Cam 2" class="tile-img" loading="lazy">
+            </div>
+          </div>
+
+          <!-- Cam 3: Right Wing -->
+          <div class="cam-tile" id="tileCam3" data-cam="cam3">
+            <div class="tile-header">
+              <span class="tile-tally" id="tallyCam3">CAM 3</span>
+              <span class="tile-label">RIGHT WING / GOAL</span>
+              <span class="tile-score" id="scoreCam3">SC: 0</span>
+            </div>
+            <div class="tile-stream-box">
+              <img src="/stream/cam3" alt="Cam 3" class="tile-img" loading="lazy">
+            </div>
+          </div>
+
+          <!-- Stadium Panoramic Cam -->
+          <div class="cam-tile" id="tilePanoramic" data-cam="panoramic">
+            <div class="tile-header">
+              <span class="tile-tally">WIDE</span>
+              <span class="tile-label">STADIUM PANORAMA</span>
+              <span class="tile-tag">RAW 360°</span>
+            </div>
+            <div class="tile-stream-box">
+              <img src="/stream/panoramic" alt="Stadium Panorama" class="tile-img" loading="lazy">
+            </div>
+          </div>
+
+          <!-- Ball Focus Cam -->
+          <div class="cam-tile" id="tileBallFocus" data-cam="ball_focus">
+            <div class="tile-header">
+              <span class="tile-tally">FOCUS</span>
+              <span class="tile-label">BALL TRACK LOCK</span>
+              <span class="tile-tag">AUTO-PTZ</span>
+            </div>
+            <div class="tile-stream-box">
+              <img src="/stream/ball_focus" alt="Ball Focus" class="tile-img" loading="lazy">
+            </div>
+          </div>
+
+          <!-- Player Focus Cam -->
+          <div class="cam-tile" id="tilePlayerFocus" data-cam="player_focus">
+            <div class="tile-header">
+              <span class="tile-tally">HERO</span>
+              <span class="tile-label">CARRIER / SPRINT</span>
+              <span class="tile-tag">TACTICAL</span>
+            </div>
+            <div class="tile-stream-box">
+              <img src="/stream/player_focus" alt="Hero Player" class="tile-img" loading="lazy">
+            </div>
+          </div>
+        </div>
+
+        <!-- Operator Switcher Bus -->
+        <div class="switcher-bus">
+          <div class="bus-label">PROGRAM BUS:</div>
+          <button class="btn-cut active" id="btnCutAuto" data-cam="auto">AI AUTO DIRECTOR</button>
+          <button class="btn-cut" id="btnCutCam1" data-cam="cam1">TAKE CAM 1</button>
+          <button class="btn-cut" id="btnCutCam2" data-cam="cam2">TAKE CAM 2</button>
+          <button class="btn-cut" id="btnCutCam3" data-cam="cam3">TAKE CAM 3</button>
+          <button class="btn-cut" id="btnCutPano" data-cam="panoramic">PANORAMIC</button>
+          <button class="btn-cut" id="btnCutBall" data-cam="ball_focus">BALL FOCUS</button>
+          <button class="btn-cut" id="btnCutPlayer" data-cam="player_focus">PLAYER FOCUS</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Pan & Zoom Console, 2D Radar & Match Intelligence -->
+    <aside class="sidebar-column">
+      <!-- Pan & Zoom Virtual PTZ Console -->
+      <div class="panel-card ptz-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">PAN & ZOOM CAMERA CONTROL</h3>
+          <span class="ptz-mode-tag" id="ptzModeDisplay">AUTO FOLLOW</span>
+        </div>
+
+        <div class="ptz-content">
+          <!-- Focus Mode Selector -->
+          <div class="control-row">
+            <label class="ctrl-label">FOCUS TARGET:</label>
+            <div class="mode-pill-group">
+              <button class="mode-pill active" data-mode="DIRECTOR_AUTO">AI Follow</button>
+              <button class="mode-pill" data-mode="BALL_FOCUS">Ball Lock</button>
+              <button class="mode-pill" data-mode="PLAYER_FOCUS">Player Lock</button>
+              <button class="mode-pill" data-mode="MANUAL_PTZ">Manual PTZ</button>
+            </div>
+          </div>
+
+          <!-- Zoom Slider & Quick Presets -->
+          <div class="control-row">
+            <div class="slider-header">
+              <label class="ctrl-label">ZOOM MAGNIFICATION:</label>
+              <span class="slider-val" id="zoomValueText">1.0x</span>
+            </div>
+            <input type="range" id="zoomSlider" min="1.0" max="3.2" step="0.05" value="1.0" class="ctrl-slider">
+            <div class="zoom-presets">
+              <button class="preset-btn" data-zoom="1.0">1.0x Wide</button>
+              <button class="preset-btn" data-zoom="1.5">1.5x Tactical</button>
+              <button class="preset-btn" data-zoom="2.2">2.2x Action</button>
+              <button class="preset-btn" data-zoom="3.0">3.0x Hero</button>
+            </div>
+          </div>
+
+          <!-- D-Pad Directional Controls for Manual Pan -->
+          <div class="manual-pan-box" id="manualPanBox">
+            <label class="ctrl-label">MANUAL PAN / TILT:</label>
+            <div class="dpad-grid">
+              <button class="dpad-btn up" id="dpadUp" title="Tilt Up">▲</button>
+              <button class="dpad-btn left" id="dpadLeft" title="Pan Left">◀</button>
+              <button class="dpad-btn center" id="dpadCenter" title="Center View">⊙</button>
+              <button class="dpad-btn right" id="dpadRight" title="Pan Right">▶</button>
+              <button class="dpad-btn down" id="dpadDown" title="Tilt Down">▼</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2D Pitch Radar & Tactical Map -->
+      <div class="panel-card radar-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">LIVE 2D PITCH RADAR</h3>
+          <span class="radar-tag">BIRD'S EYE</span>
+        </div>
+        <div class="radar-canvas-box">
+          <canvas id="pitchCanvas" width="340" height="210"></canvas>
+        </div>
+        <div class="radar-legend">
+          <span class="legend-item"><span class="legend-dot dot-home"></span> Home</span>
+          <span class="legend-item"><span class="legend-dot dot-away"></span> Away</span>
+          <span class="legend-item"><span class="legend-dot dot-ball"></span> Ball</span>
+        </div>
+      </div>
+
+      <!-- Kinematics & Possession Telemetry -->
+      <div class="panel-card telemetry-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">MATCH TELEMETRY & KINEMATICS</h3>
+        </div>
+        
+        <div class="telemetry-grid">
+          <!-- Ball Speed Gauge -->
+          <div class="telemetry-stat">
+            <span class="stat-label">BALL VELOCITY</span>
+            <div class="stat-main">
+              <span class="stat-num" id="ballSpeedKmh">0.0</span>
+              <span class="stat-unit">km/h</span>
+            </div>
+            <span class="stat-sub" id="ballSpeedPx">0.0 px/frame</span>
+          </div>
+
+          <!-- Ball Trajectory Status -->
+          <div class="telemetry-stat">
+            <span class="stat-label">FLIGHT STATUS</span>
+            <div class="stat-main">
+              <span class="stat-status green" id="ballTrajectoryStatus">TRACKED</span>
+            </div>
+            <span class="stat-sub" id="ballSourceMethod">Direct Patch</span>
+          </div>
+
+          <!-- Ball Carrier -->
+          <div class="telemetry-stat">
+            <span class="stat-label">BALL CARRIER</span>
+            <div class="stat-main">
+              <span class="stat-num" id="carrierId">#--</span>
+            </div>
+            <span class="stat-sub" id="carrierTeamText">Team --</span>
+          </div>
+
+          <!-- Players Visible -->
+          <div class="telemetry-stat">
+            <span class="stat-label">ENTITIES TRACKED</span>
+            <div class="stat-main">
+              <span class="stat-num" id="playerCountVal">0</span>
+              <span class="stat-unit">PLAYERS</span>
+            </div>
+            <span class="stat-sub">ByteTrack Active</span>
+          </div>
+        </div>
+
+        <!-- Possession Bar -->
+        <div class="possession-box">
+          <div class="possession-header">
+            <span>POSSESSION: HOME <strong id="possHomePct">50%</strong></span>
+            <span>AWAY <strong id="possAwayPct">50%</strong></span>
+          </div>
+          <div class="possession-bar">
+            <div class="poss-fill home" id="possFillHome" style="width: 50%;"></div>
+            <div class="poss-fill away" id="possFillAway" style="width: 50%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-Time Event Feed -->
+      <div class="panel-card events-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">EVENT INTELLIGENCE LOG</h3>
+          <span class="badge-count" id="eventCountBadge">0 EVENTS</span>
+        </div>
+        <div class="events-scroll-list" id="eventsList">
+          <div class="empty-events-msg">Waiting for match events...</div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Director Settings & Studio Guide Modal -->
+  <div class="modal-backdrop" id="guideModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 class="modal-title">⚙️ AI DIRECTOR SETTINGS & STUDIO GUIDE</h2>
+        <button class="modal-close" id="btnCloseGuide">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="guide-tabs">
+          <button class="guide-tab active" data-tab="settingsTab">Director Parameters</button>
+          <button class="guide-tab" data-tab="howItWorksTab">How Switching & Tracking Work</button>
+          <button class="guide-tab" data-tab="uiExplainerTab">UI Panels Explained</button>
+        </div>
+
+        <!-- Tab 1: Director Settings -->
+        <div class="tab-pane active" id="settingsTab">
+          <div class="settings-form">
+            <div class="form-group">
+              <label for="cfgMinShot">Min Shot Length (Anti-Flicker): <strong id="valMinShot">2.0s</strong></label>
+              <span class="form-hint">Prevents rapid, jittery camera cuts. The camera will stay on air for at least this long before cutting.</span>
+              <input type="range" id="cfgMinShot" min="0.5" max="5.0" step="0.1" value="2.0" class="ctrl-slider">
+            </div>
+
+            <div class="form-group">
+              <label for="cfgHysteresis">Hysteresis Window: <strong id="valHysteresis">0.5s</strong></label>
+              <span class="form-hint">Another camera must beat the live camera continuously for this duration before switching.</span>
+              <input type="range" id="cfgHysteresis" min="0.1" max="2.0" step="0.1" value="0.5" class="ctrl-slider">
+            </div>
+
+            <div class="form-group">
+              <label for="cfgCenterBonus">Ball Centering Weight: <strong id="valCenterBonus">+30 pts</strong></label>
+              <span class="form-hint">Bonus points given to a camera when the ball is positioned directly in the center sweet spot.</span>
+              <input type="range" id="cfgCenterBonus" min="0" max="60" step="5" value="30" class="ctrl-slider">
+            </div>
+
+            <div class="form-group">
+              <label for="cfgFallbackCam">Fallback Camera (Ball Lost):</label>
+              <select id="cfgFallbackCam" class="source-dropdown">
+                <option value="1">Cam 1 (Left Wing)</option>
+                <option value="2" selected>Cam 2 (Center Midfield Tactical)</option>
+                <option value="3">Cam 3 (Right Wing)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: How It Works -->
+        <div class="tab-pane" id="howItWorksTab">
+          <div class="guide-section">
+            <h3>1. Camera Scoring Formula</h3>
+            <p>Every frame, every camera receives an autonomous broadcast score:</p>
+            <ul class="guide-list">
+              <li><strong>Ball Detected:</strong> <code>+100 points</code> when direct vision detects the football.</li>
+              <li><strong>Ball Extrapolated:</strong> <code>+60 points</code> when the Physics Kalman filter bridges an occlusion.</li>
+              <li><strong>Center Sweet-Spot:</strong> <code>+0 to +30 points</code> based on how well the ball is framed near the middle.</li>
+              <li><strong>Player Density:</strong> <code>+1 point</code> per visible player (up to <code>+10</code>).</li>
+            </ul>
+          </div>
+          <div class="guide-section">
+            <h3>2. Ball, Goal & Foul Detection</h3>
+            <ul class="guide-list">
+              <li><strong>High-Recall Ball Tracking:</strong> Bridges 1–12 missed frames using 6D physical Kalman filter with drag & gravity.</li>
+              <li><strong>Goal Detection:</strong> Triggers when the ball crosses the goal line with high inward velocity, followed by teammate celebration clustering.</li>
+              <li><strong>Foul / Tackle Detection:</strong> Detects opposing players colliding at high velocity with sudden aspect-ratio collapse (player grounded/tackled).</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Tab 3: UI Explainer -->
+        <div class="tab-pane" id="uiExplainerTab">
+          <div class="guide-section">
+            <ul class="guide-list">
+              <li><strong>PROGRAM MONITOR:</strong> The main on-air output with dynamic PTZ framing, RoI Zoom PiP, and lower-third graphics.</li>
+              <li><strong>MULTIVIEW SWITCHER:</strong> Live tiles for Cam 1, 2, 3, Ball Focus, and Hero Player. The on-air camera is outlined in <strong>RED</strong>.</li>
+              <li><strong>PAN & ZOOM CONSOLE:</strong> Control magnification ($1.0\times - 3.2\times$), switch focus modes, or click-and-drag to pan the camera live.</li>
+              <li><strong>2D PITCH RADAR:</strong> Top-down bird's-eye field showing Home (cyan), Away (red), and moving Ball (gold).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Chimes for Alerts (Synthetic Web Audio) -->
+  <script src="/static/app.js"></script>
+</body>
+</html>

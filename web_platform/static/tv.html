@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TELEVISION BROADCAST FEED // Football AI Director</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #030712;
+      --card-bg: rgba(15, 23, 42, 0.85);
+      --accent-red: #ef4444;
+      --accent-cyan: #06b6d4;
+      --accent-green: #22c55e;
+      --accent-gold: #f59e0b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: rgba(255, 255, 255, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Fullscreen Broadcast Container */
+    .tv-viewport-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      cursor: default;
+    }
+
+    .tv-stream-img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background-color: #000;
+    }
+
+    /* Floating Status HUD */
+    .tv-top-hud {
+      position: absolute;
+      top: 16px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      z-index: 50;
+      transition: opacity 0.3s ease;
+    }
+
+    .tv-hud-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(11, 15, 25, 0.78);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-red);
+      box-shadow: 0 0 10px var(--accent-red);
+      animation: pulse-red 1.4s infinite;
+    }
+
+    @keyframes pulse-red {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    .hud-specs {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-green);
+    }
+
+    /* Floating Bottom Action Toolbar */
+    .tv-controls-bar {
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(15, 23, 42, 0.88);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 8px 14px;
+      z-index: 100;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+
+    .tv-controls-bar.hidden {
+      opacity: 0;
+      transform: translate(-50%, 20px);
+      pointer-events: none;
+    }
+
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toolbar-separator {
+      width: 1px;
+      height: 24px;
+      background: rgba(255, 255, 255, 0.15);
+      margin: 0 4px;
+    }
+
+    .btn-tv {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .btn-tv:hover {
+      background: rgba(255, 255, 255, 0.18);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-tv.active {
+      background: #2563eb;
+      color: #fff;
+      border-color: #60a5fa;
+      box-shadow: 0 0 12px rgba(37, 99, 235, 0.5);
+    }
+
+    .btn-tv.highlight {
+      background: linear-gradient(135deg, #059669, #10b981);
+      color: #fff;
+      border-color: #34d399;
+    }
+
+    .btn-tv.danger {
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    /* Notification Toast */
+    .tv-toast {
+      position: absolute;
+      top: 70px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--accent-cyan);
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 200;
+    }
+
+    .tv-toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Keyboard Shortcuts Legend */
+    .tv-legend {
+      position: absolute;
+      bottom: 84px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--text-muted);
+      background: rgba(0, 0, 0, 0.6);
+      padding: 4px 12px;
+      border-radius: 9999px;
+      pointer-events: none;
+      z-index: 50;
+      transition: opacity 0.3s ease;
+    }
+
+    .kbd {
+      display: inline-block;
+      padding: 1px 5px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fff;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      margin: 0 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="tv-viewport-container" id="tvContainer">
+    <!-- Main 1080p Stream Image -->
+    <img id="tvFeedImg" src="/stream/tv" alt="TV Broadcast Feed" class="tv-stream-img">
+
+    <!-- Top Left & Right Broadcast Telemetry Overlay -->
+    <div class="tv-top-hud" id="tvTopHud">
+      <div class="tv-hud-badge">
+        <span class="live-dot"></span>
+        <span id="feedModeLabel">TV BROADCAST ON-AIR</span>
+        <span class="toolbar-separator" style="height: 12px;"></span>
+        <span id="activeCamTag" style="color: var(--accent-gold);">CAM 2 (TACTICAL)</span>
+      </div>
+
+      <div class="tv-hud-badge">
+        <span id="sourceNameBadge">STADIUM MULTI-CAM</span>
+        <span class="toolbar-separator" style="height: 12px;"></span>
+        <span class="hud-specs" id="specsBadge">1080p60 • 25.0 FPS</span>
+      </div>
+    </div>
+
+    <!-- Quick Notification Toast -->
+    <div class="tv-toast" id="tvToast">OBS Feed URL Copied to Clipboard!</div>
+
+    <!-- Keyboard legend -->
+    <div class="tv-legend" id="tvLegend">
+      Hotkeys: <span class="kbd">F</span> Fullscreen • <span class="kbd">C</span> TV / Clean Feed • <span class="kbd">1-3</span> Cut Cam • <span class="kbd">B</span> Ball Lock • <span class="kbd">P</span> Player Lock • <span class="kbd">A</span> Auto
+    </div>
+
+    <!-- Floating Broadcast Control Toolbar -->
+    <div class="tv-controls-bar" id="tvControlsBar">
+      <div class="toolbar-group">
+        <button id="btnFeedTv" class="btn-tv active" title="TV Feed with Scoreboard Bug & Badges">📺 TV Program</button>
+        <button id="btnFeedClean" class="btn-tv" title="100% Clean feed for OBS / External Graphics">✨ Clean Feed (OBS)</button>
+      </div>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Quick Cut Buttons -->
+      <div class="toolbar-group">
+        <button class="btn-tv active" id="btnCutAuto" data-cut="auto">🤖 Auto</button>
+        <button class="btn-tv" id="btnCutCam1" data-cut="cam1">Cam 1</button>
+        <button class="btn-tv" id="btnCutCam2" data-cut="cam2">Cam 2</button>
+        <button class="btn-tv" id="btnCutCam3" data-cut="cam3">Cam 3</button>
+        <button class="btn-tv" id="btnCutPano" data-cut="panoramic">🌐 Panoramic</button>
+        <button class="btn-tv" id="btnCutBall" data-cut="ball_focus">⚽ Ball Lock</button>
+        <button class="btn-tv" id="btnCutPlayer" data-cut="player_focus">🏃 Player</button>
+      </div>
+
+      <div class="toolbar-separator"></div>
+
+      <!-- Export & OBS Buttons -->
+      <div class="toolbar-group">
+        <button id="btnCopyUrl" class="btn-tv highlight" title="Copy direct stream URL for OBS Studio">📋 Copy OBS URL</button>
+        <button id="btnFullscreen" class="btn-tv" title="Toggle Fullscreen (F)">⛶ Fullscreen</button>
+        <a href="/" class="btn-tv" title="Open Multi-Screen Studio Dashboard">🎛️ Studio</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const container = document.getElementById("tvContainer");
+      const img = document.getElementById("tvFeedImg");
+      const topHud = document.getElementById("tvTopHud");
+      const controlsBar = document.getElementById("tvControlsBar");
+      const legend = document.getElementById("tvLegend");
+      const toast = document.getElementById("tvToast");
+
+      const btnFeedTv = document.getElementById("btnFeedTv");
+      const btnFeedClean = document.getElementById("btnFeedClean");
+      const btnCopyUrl = document.getElementById("btnCopyUrl");
+      const btnFullscreen = document.getElementById("btnFullscreen");
+
+      const feedModeLabel = document.getElementById("feedModeLabel");
+      const activeCamTag = document.getElementById("activeCamTag");
+      const sourceNameBadge = document.getElementById("sourceNameBadge");
+      const specsBadge = document.getElementById("specsBadge");
+
+      const cutBtns = document.querySelectorAll("[data-cut]");
+
+      let currentFeed = "tv"; // "tv" or "clean"
+      let hideTimeout = null;
+
+      function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add("visible");
+        setTimeout(() => toast.classList.remove("visible"), 3000);
+      }
+
+      function switchFeed(type) {
+        currentFeed = type;
+        const base = type === "clean" ? "/stream/clean" : "/stream/tv";
+        img.src = `${base}?t=${Date.now()}`;
+
+        btnFeedTv.classList.toggle("active", type === "tv");
+        btnFeedClean.classList.toggle("active", type === "clean");
+
+        feedModeLabel.textContent = type === "clean" ? "CLEAN OBS FEED (RAW 1080p)" : "TV BROADCAST ON-AIR";
+        showToast(type === "clean" ? "Switched to 100% Clean Feed (No Graphics)" : "Switched to TV Broadcast Feed (Score Bug Active)");
+      }
+
+      btnFeedTv.addEventListener("click", () => switchFeed("tv"));
+      btnFeedClean.addEventListener("click", () => switchFeed("clean"));
+
+      // Copy OBS URL
+      btnCopyUrl.addEventListener("click", () => {
+        const streamPath = currentFeed === "clean" ? "/stream/clean" : "/stream/tv";
+        const fullUrl = `${window.location.origin}${streamPath}`;
+        navigator.clipboard.writeText(fullUrl).then(() => {
+          showToast(`📋 Stream URL Copied for OBS: ${fullUrl}`);
+        }).catch(() => {
+          showToast(`Stream URL: ${fullUrl}`);
+        });
+      });
+
+      // Fullscreen
+      function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+          container.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+      btnFullscreen.addEventListener("click", toggleFullscreen);
+
+      // Camera cut buttons
+      cutBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+          const cut = btn.dataset.cut;
+          fetch("/api/director/cut", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ camera_id: cut })
+          }).then(res => res.json()).then(data => {
+            cutBtns.forEach(b => b.classList.toggle("active", b === btn));
+            showToast(`Cut to: ${btn.textContent.trim()}`);
+          });
+        });
+      });
+
+      // Keyboard hotkeys
+      window.addEventListener("keydown", (e) => {
+        if (e.target.tagName === "INPUT") return;
+        const key = e.key.toUpperCase();
+
+        if (key === "F") {
+          e.preventDefault();
+          toggleFullscreen();
+        } else if (key === "C") {
+          e.preventDefault();
+          switchFeed(currentFeed === "tv" ? "clean" : "tv");
+        } else if (key === "1") {
+          document.getElementById("btnCutCam1")?.click();
+        } else if (key === "2") {
+          document.getElementById("btnCutCam2")?.click();
+        } else if (key === "3") {
+          document.getElementById("btnCutCam3")?.click();
+        } else if (key === "B") {
+          document.getElementById("btnCutBall")?.click();
+        } else if (key === "P") {
+          document.getElementById("btnCutPlayer")?.click();
+        } else if (key === "A") {
+          document.getElementById("btnCutAuto")?.click();
+        } else if (key === "H") {
+          controlsBar.classList.toggle("hidden");
+          topHud.style.opacity = controlsBar.classList.contains("hidden") ? "0" : "1";
+          legend.style.opacity = controlsBar.classList.contains("hidden") ? "0" : "1";
+        } else if (e.code === "Space") {
+          e.preventDefault();
+          fetch("/api/playback/pause", { method: "POST" });
+        }
+      });
+
+      // Auto-hide controls bar on idle
+      function resetControlsTimer() {
+        controlsBar.classList.remove("hidden");
+        topHud.style.opacity = "1";
+        legend.style.opacity = "1";
+        clearTimeout(hideTimeout);
+        hideTimeout = setTimeout(() => {
+          controlsBar.classList.add("hidden");
+          topHud.style.opacity = "0.2";
+          legend.style.opacity = "0";
+        }, 4000);
+      }
+
+      window.addEventListener("mousemove", resetControlsTimer);
+      window.addEventListener("click", resetControlsTimer);
+      resetControlsTimer();
+
+      // Telemetry WebSocket for live title/status
+      function connectWS() {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg.type === "telemetry") {
+              if (msg.fps) {
+                specsBadge.textContent = `1080p60 • ${msg.fps.toFixed(1)} FPS`;
+              }
+              if (msg.source_name) {
+                sourceNameBadge.textContent = msg.source_name.toUpperCase();
+              }
+              if (msg.active_program_view) {
+                const map = {
+                  "auto": `AI AUTO (CAM ${msg.active_cam_id})`,
+                  "cam1": "CAM 1 (LEFT)",
+                  "cam2": "CAM 2 (CENTER)",
+                  "cam3": "CAM 3 (RIGHT)",
+                  "panoramic": "STADIUM PANORAMA",
+                  "ball_focus": "BALL TRACK LOCK",
+                  "player_focus": "HERO PLAYER LOCK"
+                };
+                activeCamTag.textContent = map[msg.active_program_view] || msg.active_program_view.toUpperCase();
+
+                // Highlight active button
+                cutBtns.forEach(b => {
+                  b.classList.toggle("active", b.dataset.cut === msg.active_program_view);
+                });
+              }
+            }
+          } catch(e) {}
+        };
+
+        ws.onclose = () => {
+          setTimeout(connectWS, 2000);
+        };
+      }
+      connectWS();
+    })();
+  </script>
+</body>
+</html>
