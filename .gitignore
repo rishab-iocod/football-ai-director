@@ -1,0 +1,30 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Large Model weights & artifacts
+models/
+*.pt
+*.onnx
+
+# Data & Video Files
+data/
+output_videos/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.pkl
+
+# IDE
+.idea/
+.vscode/
+.uv/
