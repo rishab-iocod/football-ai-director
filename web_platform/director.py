@@ -36,8 +36,8 @@ class MultiCameraDirector:
         self,
         num_cams: int = 3,
         fps: float = 25.0,
-        min_shot_seconds: float = 2.0,
-        hysteresis_seconds: float = 0.5,
+        min_shot_seconds: float = 1.0,
+        hysteresis_seconds: float = 0.28,
         lost_fallback_seconds: float = 2.0,
         fallback_cam: int = 2,
         start_cam: int = 2,
@@ -45,7 +45,7 @@ class MultiCameraDirector:
         score_predicted: float = 60.0,
         score_center_max: float = 30.0,
         score_per_player: float = 1.0,
-        score_players_max: float = 10.0,
+        score_players_max: float = 12.0,
     ):
         self.num_cams = num_cams
         self.fps = fps
@@ -124,10 +124,16 @@ class MultiCameraDirector:
         ball_status: str,
         ball_center: Optional[Tuple[float, float]],
         num_players: int,
+        has_carrier: bool = False,
         cam_width: int = 960,
     ) -> float:
-        """Score camera: ball presence (+100/+60), centrality (+0..+30), player count (+1..+10)."""
+        """Score camera: ball carrier (+120), ball presence (+100/+60), centrality (+0..+30), player count (+2..+35)."""
         score = 0.0
+
+        # Confirmed player with ball possession is the prime broadcast signal
+        if has_carrier:
+            score += 120.0
+
         if ball_status == "detected":
             score += self.score_detected
         elif ball_status == "predicted":
@@ -155,7 +161,9 @@ class MultiCameraDirector:
         for c_idx in range(1, self.num_cams + 1):
             c_info = cams_data.get(c_idx, {})
             b_st = c_info.get("ball", {})
-            players_cnt = len(c_info.get("players", {}))
+            c_players = c_info.get("players", {})
+            players_cnt = len(c_players)
+            has_carrier = any(p.get("has_ball") for p in c_players.values())
 
             tracked = b_st.get("tracked", False)
             is_ext = b_st.get("is_extrapolated", False)
@@ -165,7 +173,7 @@ class MultiCameraDirector:
             b_bbox = b_st.get("bbox")
             b_center = ((b_bbox[0] + b_bbox[2]) / 2.0, (b_bbox[1] + b_bbox[3]) / 2.0) if b_bbox else None
 
-            sc = self.score_camera(b_src, b_center, players_cnt, cam_width=cam_width)
+            sc = self.score_camera(b_src, b_center, players_cnt, has_carrier=has_carrier, cam_width=cam_width)
             scores_by_cam[c_idx] = sc
 
             scores_list.append(
@@ -275,10 +283,14 @@ class VirtualPTZCamera:
         self.frame_w, self.frame_h = frame_size
         self.out_w, self.out_h = output_size
         self.smooth_alpha = smooth_alpha
+        self.smooth_alpha_x = smooth_alpha
+        self.smooth_alpha_y = 0.04
+        self.deadband_y = 18.0
+        self.zoom_hold_timer = 0
 
         # Camera viewport center & zoom
         self.cam_x = self.frame_w / 2.0
-        self.cam_y = self.frame_h / 2.0
+        self.cam_y = self.frame_h * 0.40  # Natural television horizon
         self.current_zoom = zoom
         self.target_zoom = zoom
 
@@ -335,19 +347,29 @@ class VirtualPTZCamera:
         tx, ty, tz = self._determine_target(ball_state, players)
 
         dt_vx = tx - self.prev_target_x
-        dt_vy = ty - self.prev_target_y
         self.target_vx = 0.8 * self.target_vx + 0.2 * dt_vx
-        self.target_vy = 0.8 * self.target_vy + 0.2 * dt_vy
         self.prev_target_x = tx
-        self.prev_target_y = ty
 
-        lead_x = tx + np.clip(self.target_vx * 3.5, -120.0, 120.0)
-        lead_y = ty + np.clip(self.target_vy * 2.0, -50.0, 50.0)
+        # Horizontal lookahead only (never lead vertically)
+        lead_x = tx + np.clip(self.target_vx * 3.0, -120.0, 120.0)
 
-        # Smooth EMA
-        self.cam_x += self.smooth_alpha * (lead_x - self.cam_x)
-        self.cam_y += self.smooth_alpha * (lead_y - self.cam_y)
-        self.current_zoom += 0.08 * (tz - self.current_zoom)
+        # Smooth horizontal pan
+        self.cam_x += self.smooth_alpha_x * (lead_x - self.cam_x)
+
+        # Stable vertical horizon (no lead overshoot, deadband threshold, gentle damping)
+        if abs(ty - self.cam_y) > self.deadband_y:
+            self.cam_y += self.smooth_alpha_y * (ty - self.cam_y)
+
+        # Smooth stable zoom with deadband to completely eliminate zoom breathing/pulsing
+        zoom_diff = tz - self.current_zoom
+        if abs(zoom_diff) > 0.08:
+            if zoom_diff > 0:
+                self.zoom_hold_timer = 40  # hold framing on action for 1.6s
+                self.current_zoom += 0.03 * zoom_diff
+            elif self.zoom_hold_timer > 0:
+                self.zoom_hold_timer -= 1
+            else:
+                self.current_zoom += 0.015 * zoom_diff
 
         crop_box = self._compute_crop_box()
 
@@ -410,29 +432,49 @@ class VirtualPTZCamera:
             my = self.frame_h / 2.0 + self.manual_pan_y
             return mx, my, self.target_zoom
 
-        # Auto Director: follow ball or player action
+        # Auto Director: dynamically pan and zoom to player who has the ball
+        ball_carrier = None
+        if players:
+            for p in players.values():
+                if p.get("has_ball") and p.get("bbox"):
+                    ball_carrier = p
+                    break
+
+        if ball_carrier is not None:
+            cb = ball_carrier["bbox"]
+            cx = (cb[0] + cb[2]) / 2.0
+            cy = float(np.clip((cb[1] + cb[3]) / 2.0, self.frame_h * 0.28, self.frame_h * 0.52))
+            # Cinematic television framing on the ball carrier
+            return cx, cy, max(1.28, self.target_zoom)
+
         if bx is not None and by is not None:
-            return bx, by, max(1.15, self.target_zoom)
+            cy = float(np.clip(by, self.frame_h * 0.28, self.frame_h * 0.52))
+            return bx, cy, max(1.20, self.target_zoom)
 
         if players:
             xs = [(p["bbox"][0] + p["bbox"][2]) / 2.0 for p in players.values() if p.get("bbox")]
             ys = [(p["bbox"][1] + p["bbox"][3]) / 2.0 for p in players.values() if p.get("bbox")]
             if xs and ys:
-                return float(np.median(xs)), float(np.median(ys)), 1.05
+                cy = float(np.clip(np.median(ys), self.frame_h * 0.28, self.frame_h * 0.52))
+                return float(np.median(xs)), cy, max(1.15, self.target_zoom)
 
-        return self.frame_w / 2.0, self.frame_h / 2.0, 1.0
+        return self.cam_x, self.cam_y, self.current_zoom
 
     def _compute_crop_box(self) -> Tuple[int, int, int, int]:
         target_aspect = 16.0 / 9.0
         frame_aspect = self.frame_w / max(1.0, self.frame_h)
 
-        if frame_aspect > target_aspect:
-            # Panoramic source: crop a true 16:9 broadcast window
+        if frame_aspect >= target_aspect:
+            # Panoramic / wide source: crop a true 16:9 broadcast window
             crop_h = self.frame_h / max(1.0, self.current_zoom)
             crop_w = crop_h * target_aspect
         else:
+            # 4:3 camera source (e.g. 960x720): crop a true 16:9 window zoomed on ball/player
             crop_w = self.frame_w / max(1.0, self.current_zoom)
-            crop_h = self.frame_h / max(1.0, self.current_zoom)
+            crop_h = crop_w / target_aspect
+            if crop_h > self.frame_h:
+                crop_h = self.frame_h
+                crop_w = crop_h * target_aspect
 
         x1 = self.cam_x - crop_w / 2.0
         y1 = self.cam_y - crop_h / 2.0

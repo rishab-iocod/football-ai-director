@@ -326,9 +326,9 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def main():
-    # Auto-start engine on default panoramic stadium source
+    # Auto-start engine on Alfheim multi-camera match
     print("[Server] Starting MatchEngine...")
-    engine.start("panoramic_director")
+    engine.start("multi_cams")
     uvicorn.run(app, host="0.0.0.0", port=8088, log_level="info")
 
 

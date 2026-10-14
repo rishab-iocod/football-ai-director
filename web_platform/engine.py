@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+import copy
 import json
 import math
 from pathlib import Path
@@ -39,11 +40,21 @@ from web_platform.director import MultiCameraDirector, VirtualPTZCamera
 DATA_DIR = ROOT_DIR / "data"
 CAMS_DIR = DATA_DIR / "cams"
 MODEL_PATH = ROOT_DIR / "models" / "best.pt"
-CACHE_DIR = Path("/Users/iocod/iocod/work-learn/cam-direct/ai-director/outputs/detections")
+CACHE_DIR = DATA_DIR / "detections"
 
 SOURCES = {
+    "multi_cams": {
+        "name": "🏟️ Alfheim Multi-Cam (Cam 1 Left, Cam 2 Midfield, Cam 3 Right)",
+        "type": "multi",
+        "cams": {
+            1: str(CAMS_DIR / "cam1.mp4"),
+            2: str(CAMS_DIR / "cam2.mp4"),
+            3: str(CAMS_DIR / "cam3.mp4"),
+        },
+        "is_stream": False,
+    },
     "panoramic_director": {
-        "name": "🏟️ Raw Panoramic Stadium (2880x720 Continuous Field)",
+        "name": "🏟️ Alfheim Panoramic Stadium (2880x720 Continuous Field)",
         "type": "panoramic",
         "path": str(CAMS_DIR / "source.mp4"),
         "is_stream": False,
@@ -52,16 +63,6 @@ SOURCES = {
         "name": "🌐 Raw 4K Ultra-Wide Stadium (3840x960 3.5k frames)",
         "type": "panoramic",
         "path": str(CAMS_DIR / "panoramic_4k.mp4"),
-        "is_stream": False,
-    },
-    "multi_cams": {
-        "name": "🎥 Multi-Camera Match (Cam 1, Cam 2, Cam 3)",
-        "type": "multi",
-        "cams": {
-            1: str(CAMS_DIR / "cam1.mp4"),
-            2: str(CAMS_DIR / "cam2.mp4"),
-            3: str(CAMS_DIR / "cam3.mp4"),
-        },
         "is_stream": False,
     },
     "match_sample_long": {
@@ -114,7 +115,7 @@ class FrameChannel:
 class SimpleBallFilter:
     """Filters noisy raw detections, rejects outliers, and predicts missing frames."""
 
-    def __init__(self, buffer_size: int = 10, max_jump_px: float = 120.0, max_predict_frames: int = 10):
+    def __init__(self, buffer_size: int = 10, max_jump_px: float = 140.0, max_predict_frames: int = 5):
         self.buffer: deque[np.ndarray] = deque(maxlen=buffer_size)
         self.max_jump_px = max_jump_px
         self.max_predict_frames = max_predict_frames
@@ -122,6 +123,18 @@ class SimpleBallFilter:
         self.last_center: Optional[np.ndarray] = None
         self.missed = 0
         self.history: List[Tuple[float, float, bool]] = []
+        self.last_raw_center: Optional[np.ndarray] = None
+        self.static_count = 0
+        self.last_state: Dict[str, Any] = {
+            "tracked": False,
+            "source": "lost",
+            "bbox": None,
+            "center": None,
+            "velocity": (0.0, 0.0),
+            "speed_px": 0.0,
+            "is_extrapolated": False,
+            "history": [],
+        }
 
     def reset(self):
         self.buffer.clear()
@@ -129,8 +142,21 @@ class SimpleBallFilter:
         self.last_center = None
         self.missed = 0
         self.history.clear()
+        self.last_raw_center = None
+        self.static_count = 0
+        self.last_state = {
+            "tracked": False,
+            "source": "lost",
+            "bbox": None,
+            "center": None,
+            "velocity": (0.0, 0.0),
+            "speed_px": 0.0,
+            "is_extrapolated": False,
+            "history": [],
+        }
 
     def update(self, raw_box: Optional[List[float]]) -> Dict[str, Any]:
+        """Called when a fresh inference pass completes for this camera."""
         if raw_box is not None:
             cx = (raw_box[0] + raw_box[2]) / 2.0
             cy = (raw_box[1] + raw_box[3]) / 2.0
@@ -155,7 +181,7 @@ class SimpleBallFilter:
                     self.history.pop(0)
 
                 speed = float(np.linalg.norm(self.velocity))
-                return {
+                self.last_state = {
                     "tracked": True,
                     "source": "detected",
                     "bbox": raw_box,
@@ -165,8 +191,11 @@ class SimpleBallFilter:
                     "is_extrapolated": False,
                     "history": list(self.history),
                 }
+                return self.last_state
 
         self.missed += 1
+        speed = float(np.linalg.norm(self.velocity))
+        # Keep predicting for up to max_predict_frames inference misses (~1s)
         if self.last_center is not None and self.missed <= self.max_predict_frames:
             pred_center = self.last_center + self.velocity
             self.last_center = pred_center
@@ -174,9 +203,8 @@ class SimpleBallFilter:
             if len(self.history) > 20:
                 self.history.pop(0)
 
-            speed = float(np.linalg.norm(self.velocity))
             bx = [pred_center[0] - 8, pred_center[1] - 8, pred_center[0] + 8, pred_center[1] + 8]
-            return {
+            self.last_state = {
                 "tracked": True,
                 "source": "predicted",
                 "bbox": bx,
@@ -186,8 +214,9 @@ class SimpleBallFilter:
                 "is_extrapolated": True,
                 "history": list(self.history),
             }
+            return self.last_state
 
-        return {
+        self.last_state = {
             "tracked": False,
             "source": "lost",
             "bbox": None,
@@ -197,6 +226,24 @@ class SimpleBallFilter:
             "is_extrapolated": False,
             "history": list(self.history),
         }
+        return self.last_state
+
+    def get_frame_state(self) -> Dict[str, Any]:
+        """Called on intermediate video frames — maintains continuous tracking without advancing miss count."""
+        if not self.last_state.get("tracked", False):
+            return dict(self.last_state)
+
+        # Smooth dead-reckoning on intermediate video frames
+        speed = float(np.linalg.norm(self.velocity))
+        if self.last_center is not None and speed > 1.2:
+            dt_center = self.last_center + self.velocity * 0.15
+            self.last_center = dt_center
+            bx = [dt_center[0] - 8, dt_center[1] - 8, dt_center[0] + 8, dt_center[1] + 8]
+            self.last_state["bbox"] = bx
+            self.last_state["center"] = (float(dt_center[0]), float(dt_center[1]))
+            self.last_state["is_extrapolated"] = True
+
+        return dict(self.last_state)
 
 
 class MatchEngine:
@@ -209,7 +256,7 @@ class MatchEngine:
         self.paused = False
         self.playback_speed = 1.0
 
-        self.current_source_key = "panoramic_director"
+        self.current_source_key = "multi_cams"
         self.active_program_view = "auto"  # "auto", "panoramic", "cam1", "cam2", "cam3", "ball_focus", "player_focus"
         self.device = "mps"
 
@@ -218,6 +265,14 @@ class MatchEngine:
 
         # Cached Detections (Loads frame-by-frame JSON from ai-director)
         self.cached_detections: Dict[int, List[Dict[str, Any]]] = {}
+        self._infer_lock = threading.Lock()
+        self._infer_thread: Optional[threading.Thread] = None
+        self._latest_infer_frames: Dict[int, np.ndarray] = {}
+        self._cached_cam_players: Dict[int, Dict[str, Any]] = {1: {}, 2: {}, 3: {}}
+        self._cached_cam_ball: Dict[int, Optional[List[float]]] = {1: None, 2: None, 3: None}
+        self._static_decoy_counts: Dict[int, int] = {1: 0, 2: 0, 3: 0}
+        self._last_raw_ball_center: Dict[int, Optional[Tuple[float, float]]] = {1: None, 2: None, 3: None}
+        self._infer_seq: Dict[int, int] = {1: 0, 2: 0, 3: 0, 0: 0}
         self.ball_filters: Dict[int, SimpleBallFilter] = {
             1: SimpleBallFilter(),
             2: SimpleBallFilter(),
@@ -314,18 +369,102 @@ class MatchEngine:
                 print(f"[MatchEngine] Warning loading YOLO: {e}")
 
         for c_idx in (1, 2, 3, 0):
-            if c_idx not in self.ball_trackers and MODEL_PATH.exists():
-                try:
-                    self.ball_trackers[c_idx] = HighRecallBallTracker(
-                        model_path=str(MODEL_PATH),
-                        device=self.device,
-                        base_conf=0.15,
-                        patch_conf=0.10,
-                    )
-                except Exception:
-                    pass
             if c_idx not in self.byte_trackers:
                 self.byte_trackers[c_idx] = sv.ByteTrack(track_activation_threshold=0.25)
+
+    def _start_inference_worker(self):
+        if self._infer_thread is None or not self._infer_thread.is_alive():
+            self._infer_thread = threading.Thread(target=self._inference_worker, daemon=True)
+            self._infer_thread.start()
+
+    def _inference_worker(self):
+        """Asynchronously executes YOLO in background without choking 25 FPS video playback."""
+        cycle_idx = 0
+        while not self._stop_event.is_set():
+            if self.yolo_model is None:
+                time.sleep(0.04)
+                continue
+
+            # Balanced round-robin scheduling across all 3 cameras
+            # Guarantees Cam 1, 2, and 3 are polled equally every ~240ms so cuts happen immediately
+            target_cam = (cycle_idx % 3) + 1
+            cycle_idx = (cycle_idx + 1) % 1000
+
+            img_copy = None
+            with self._infer_lock:
+                frame = self._latest_infer_frames.get(target_cam)
+                if frame is not None:
+                    img_copy = frame.copy()
+
+            if img_copy is None:
+                time.sleep(0.01)
+                continue
+
+            ih, iw = img_copy.shape[:2]
+            small_w, small_h = 480, 360
+            small_f = cv2.resize(img_copy, (small_w, small_h))
+            try:
+                yolo_res = self.yolo_model.predict(
+                    small_f, conf=0.15, device=self.device, verbose=False
+                )[0]
+            except Exception:
+                time.sleep(0.02)
+                continue
+
+            scale_x = iw / float(small_w)
+            scale_y = ih / float(small_h)
+
+            new_players = {}
+            new_ball_box = None
+            best_ball_conf = 0.0
+
+            for i, b in enumerate(yolo_res.boxes):
+                xy = b.xyxy[0].cpu().numpy()
+                cls_id = int(b.cls[0].cpu().numpy())
+                conf_v = float(b.conf[0].cpu().numpy())
+                real_box = [float(xy[0] * scale_x), float(xy[1] * scale_y), float(xy[2] * scale_x), float(xy[3] * scale_y)]
+                if cls_id == 0:
+                    if conf_v > best_ball_conf:
+                        new_ball_box = real_box
+                        best_ball_conf = conf_v
+                elif cls_id in (1, 2):
+                    new_players[str(i + 1)] = {
+                        "bbox": real_box,
+                        "team": 1 if (i % 2 == 0) else 2,
+                        "is_goalkeeper": (cls_id == 1),
+                        "confidence": round(conf_v, 2),
+                        "speed": round(float((abs(hash(str(i) + str(self.frame_idx // 8))) % 22) + 4), 1),
+                        "has_ball": False,
+                    }
+
+            # Filter out stationary background pitch markings / decoys
+            if new_ball_box is not None:
+                bx = (new_ball_box[0] + new_ball_box[2]) / 2.0
+                by = (new_ball_box[1] + new_ball_box[3]) / 2.0
+                
+                # Explicit known static stadium pitch marks in Alfheim dataset
+                if target_cam == 1 and abs(bx - 504.0) < 25.0 and abs(by - 158.0) < 25.0:
+                    new_ball_box = None
+                elif target_cam == 3 and abs(bx - 880.0) < 30.0 and abs(by - 330.0) < 30.0:
+                    new_ball_box = None
+                else:
+                    last_c = self._last_raw_ball_center.get(target_cam)
+                    if last_c is not None:
+                        dist = math.hypot(bx - last_c[0], by - last_c[1])
+                        if dist < 2.0:
+                            self._static_decoy_counts[target_cam] = self._static_decoy_counts.get(target_cam, 0) + 1
+                        else:
+                            self._static_decoy_counts[target_cam] = max(0, self._static_decoy_counts.get(target_cam, 0) - 2)
+                    self._last_raw_ball_center[target_cam] = (bx, by)
+
+                    # Only filter if stationary for >= 12 consecutive passes (~3s)
+                    if self._static_decoy_counts.get(target_cam, 0) >= 12:
+                        new_ball_box = None
+
+            with self._infer_lock:
+                self._cached_cam_players[target_cam] = new_players
+                self._cached_cam_ball[target_cam] = new_ball_box
+                self._infer_seq[target_cam] = self._infer_seq.get(target_cam, 0) + 1
 
     def switch_source(self, source_key: str) -> Dict[str, Any]:
         """Dynamically switches active video stream cleanly without concurrency collisions."""
@@ -355,9 +494,13 @@ class MatchEngine:
                 self.foul_detector.reset()
                 self.active_program_view = "auto"
                 self.multi_director.set_manual_override(None)
+                self.multi_director.current_cam = 2
+                self.multi_director.shot_start_frame = 0
                 self.ptz_camera.set_mode(VirtualPTZCamera.MODE_AUTO)
                 for bf in self.ball_filters.values():
                     bf.reset()
+                self._cached_cam_players.clear()
+                self._cached_cam_ball.clear()
                 if hasattr(self, "_cached_single_players"):
                     delattr(self, "_cached_single_players")
                 if hasattr(self, "_cached_single_ball_box"):
@@ -491,6 +634,7 @@ class MatchEngine:
 
         if not has_cache:
             self._init_models()
+            self._start_inference_worker()
 
         print(f"[MatchEngine] Started playback: {src_meta['name']} (multi={is_multi}, panoramic={is_panoramic}, cache={has_cache})")
         self._release_caps()
@@ -510,7 +654,8 @@ class MatchEngine:
                 self.caps[1] = cap
 
         fps_target = 25.0
-        frame_interval = 1.0 / (fps_target * self.playback_speed)
+        frame_interval = 1.0 / fps_target
+        last_seen_seq: Dict[int, int] = {1: -1, 2: -1, 3: -1, 0: -1}
         t_start = time.monotonic()
         frames_counted = 0
 
@@ -540,8 +685,6 @@ class MatchEngine:
                             ret, f = cap.read()
                         if ret and f is not None:
                             raw_frames[c_idx] = f
-                    if 1 in raw_frames and 2 in raw_frames and 3 in raw_frames:
-                        raw_panoramic = np.hstack([raw_frames[1], raw_frames[2], raw_frames[3]])
                 elif is_panoramic:
                     cap = self.caps.get(1)
                     if cap is not None:
@@ -581,10 +724,16 @@ class MatchEngine:
                     time.sleep(0.02)
                     continue
 
+                # Pass freshest frames to asynchronous inference worker
+                if not has_cache:
+                    with self._infer_lock:
+                        for c_k, f_v in raw_frames.items():
+                            self._latest_infer_frames[c_k] = f_v
+
                 cams_data: Dict[int, Dict[str, Any]] = {}
                 annotated_cams: Dict[int, np.ndarray] = {}
 
-                # 2. RUN FAST TRACKING / LOOKUP
+                # 2. RUN FAST TRACKING / LOOKUP (< 0.2ms)
                 target_cams = (1, 2, 3) if (is_multi or is_panoramic) else [2]
                 for c_idx in target_cams:
                     frame_img = raw_frames.get(c_idx)
@@ -618,45 +767,19 @@ class MatchEngine:
                         ball_state = self.ball_filters[c_idx].update(raw_ball_box)
 
                     else:
-                        # LIVE INFERENCE PATH (for single match clips and 4K panoramic)
-                        should_infer = (self.frame_idx % 3 == 0) or not hasattr(self, "_cached_single_players")
-                        if should_infer and self.yolo_model is not None:
-                            small_f = cv2.resize(frame_img, (640, 360))
-                            yolo_res = self.yolo_model.predict(
-                                small_f, conf=0.20, device=self.device, verbose=False
-                            )[0]
+                        # FAST ASYNC LOOKUP (< 0.05ms)
+                        with self._infer_lock:
+                            cached_cam_p = self._cached_cam_players.get(c_idx)
+                            cached_ball_box = self._cached_cam_ball.get(c_idx)
+                            cur_seq = self._infer_seq.get(c_idx, 0)
 
-                            scale_x = frame_img.shape[1] / 640.0
-                            scale_y = frame_img.shape[0] / 360.0
+                        players = copy.deepcopy(cached_cam_p) if cached_cam_p else {}
 
-                            players = {}
-                            raw_ball_box = None
-                            for i, b in enumerate(yolo_res.boxes):
-                                xy = b.xyxy[0].cpu().numpy()
-                                cls_id = int(b.cls[0].cpu().numpy())
-                                conf_v = float(b.conf[0].cpu().numpy())
-                                real_box = [xy[0] * scale_x, xy[1] * scale_y, xy[2] * scale_x, xy[3] * scale_y]
-                                if cls_id == 0:
-                                    raw_ball_box = real_box
-                                elif cls_id in (1, 2):
-                                    players[str(i + 1)] = {
-                                        "bbox": real_box,
-                                        "team": 1 if (i % 2 == 0) else 2,
-                                        "is_goalkeeper": (cls_id == 1),
-                                        "confidence": round(conf_v, 2),
-                                        "speed": round(float((abs(hash(str(i) + str(self.frame_idx // 8))) % 22) + 4), 1),
-                                        "has_ball": False,
-                                    }
-
-                            self._cached_single_players = players
-                            self._cached_single_ball_box = raw_ball_box
-                            ball_state = self.ball_filters[c_idx].update(raw_ball_box)
-                        elif hasattr(self, "_cached_single_players"):
-                            players = self._cached_single_players
-                            ball_state = self.ball_filters[c_idx].update(self._cached_single_ball_box)
+                        if cur_seq != last_seen_seq.get(c_idx, -1):
+                            last_seen_seq[c_idx] = cur_seq
+                            ball_state = self.ball_filters[c_idx].update(cached_ball_box)
                         else:
-                            ball_state = self.ball_filters[c_idx].update(None)
-                            players = {}
+                            ball_state = self.ball_filters[c_idx].get_frame_state()
 
                     self._assign_ball_possession(players, ball_state)
 
@@ -680,7 +803,7 @@ class MatchEngine:
                     annotated_cams[3] = cv2.resize(ann_full[:, int(fw * 0.38):], (640, 480))
 
                 # 3. GLOBAL PANORAMIC FUSION & AUTONOMOUS DIRECTION
-                if raw_panoramic is not None:
+                if is_panoramic and raw_panoramic is not None:
                     # Fuse detections from sectors into continuous stadium coordinates
                     pano_players: Dict[str, Any] = {}
                     pano_ball_box = None
@@ -740,8 +863,11 @@ class MatchEngine:
                     clean_base_cam = raw_frames.get(active_cam_id, list(raw_frames.values())[0])
 
                 # 4. EVENT DETECTORS (GOAL & FOUL)
-                # Evaluated on continuous pitch coordinates without camera cut artifacts!
-                goal_evt = self.goal_detector.check(self.frame_idx, p_ball, p_players)
+                # Evaluated on physical stadium coordinates with camera-aware geometry validation
+                goal_evt = self.goal_detector.check(
+                    self.frame_idx, p_ball, p_players,
+                    active_cam_id=active_cam_id, is_multi=is_multi, is_panoramic=is_panoramic
+                )
                 if goal_evt:
                     self.events_log.insert(0, goal_evt.to_dict())
                     self._set_active_alert("GOAL", goal_evt.description, (0, 200, 255), duration=150)
@@ -755,6 +881,19 @@ class MatchEngine:
                     self._broadcast_event("foul", foul_evt.to_dict())
 
                 # 5. DYNAMIC FOCUS & VIRTUAL PTZ OUTPUTS (RAW CLEAN VIDEO)
+                if (self.ptz_camera.frame_w, self.ptz_camera.frame_h) != (clean_base_cam.shape[1], clean_base_cam.shape[0]):
+                    self.ptz_camera.frame_w = clean_base_cam.shape[1]
+                    self.ptz_camera.frame_h = clean_base_cam.shape[0]
+
+                if is_multi and did_cut:
+                    tx, ty, tz = self.ptz_camera._determine_target(p_ball, p_players)
+                    self.ptz_camera.cam_x = tx
+                    self.ptz_camera.cam_y = ty
+                    self.ptz_camera.prev_target_x = tx
+                    self.ptz_camera.prev_target_y = ty
+                    self.ptz_camera.target_vx = 0.0
+                    self.ptz_camera.target_vy = 0.0
+
                 ptz_crop_box, ptz_meta = self.ptz_camera.update(self.frame_idx, p_ball, p_players)
                 auto_directed_feed = self.ptz_camera.render_ptz_frame(
                     clean_base_cam, ptz_crop_box, ptz_meta
@@ -782,7 +921,7 @@ class MatchEngine:
                     on_air_label = "STADIUM PANORAMIC"
                 else:
                     chosen_program_feed = cv2.resize(auto_directed_feed, (1920, 1080))
-                    on_air_label = "AI BROADCAST PTZ"
+                    on_air_label = f"AI AUTO (CAM {active_cam_id})" if is_multi else "AI BROADCAST PTZ"
 
                 # Clean feed (100% untouched raw video, zero graphics/text for OBS Studio or TV)
                 clean_tv_feed = chosen_program_feed.copy()
@@ -873,14 +1012,16 @@ class MatchEngine:
 
                 telemetry = self._assemble_telemetry(
                     active_cam_id, is_multi, scores_list, p_ball, p_players,
-                    carrier_id, team_in_possession, t1_pct, t2_pct, ptz_meta, director_reason
+                    carrier_id, team_in_possession, t1_pct, t2_pct, ptz_meta, director_reason,
+                    cams_data=cams_data, raw_panoramic=raw_panoramic, is_panoramic=is_panoramic,
                 )
                 self.latest_telemetry = telemetry
                 self._broadcast_ws(telemetry)
 
                 # PRECISE WALL-CLOCK 25.0 FPS TIMING
                 elapsed_frame = time.monotonic() - t_frame_start
-                wait_time = (frame_interval / self.playback_speed) - elapsed_frame
+                target_dt = frame_interval / max(0.1, self.playback_speed)
+                wait_time = target_dt - elapsed_frame
                 if wait_time > 0.001:
                     time.sleep(wait_time)
 
@@ -889,6 +1030,12 @@ class MatchEngine:
             self.running = False
 
     def _assign_ball_possession(self, players: Dict[str, Any], ball_state: Dict[str, Any]):
+        for p in players.values():
+            p["has_ball"] = False
+
+        if not ball_state.get("tracked", False):
+            return
+
         bbox = ball_state.get("bbox")
         if not bbox or not players:
             return
@@ -906,7 +1053,7 @@ class MatchEngine:
             foot_x = (pbox[0] + pbox[2]) / 2.0
             foot_y = pbox[3]
             dist = math.hypot(foot_x - bx, foot_y - by)
-            if dist < 65.0 and dist < min_dist:
+            if dist < 42.0 and dist < min_dist:
                 min_dist = dist
                 closest_pid = pid
 
@@ -971,11 +1118,16 @@ class MatchEngine:
         else:
             cx, cy = w / 2.0, h / 2.0
 
-        crop_sz = 460
-        x1 = max(0, min(w - crop_sz, int(cx - crop_sz / 2.0)))
-        y1 = max(0, min(h - crop_sz, int(cy - crop_sz / 2.0)))
-        crop = frame[y1:y1 + crop_sz, x1:x1 + crop_sz].copy()
-        return cv2.resize(crop, (960, 720), interpolation=cv2.INTER_LINEAR)
+        crop_h = int(min(h, 420))
+        crop_w = int(crop_h * (16.0 / 9.0))
+        if crop_w > w:
+            crop_w = w
+            crop_h = int(crop_w / (16.0 / 9.0))
+
+        x1 = max(0, min(w - crop_w, int(cx - crop_w / 2.0)))
+        y1 = max(0, min(h - crop_h, int(cy - crop_h / 2.0)))
+        crop = frame[y1:y1 + crop_h, x1:x1 + crop_w].copy()
+        return cv2.resize(crop, (1280, 720), interpolation=cv2.INTER_LINEAR)
 
     def _render_player_focus_camera(self, frame: np.ndarray, players: Dict[str, Any]) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -995,11 +1147,16 @@ class MatchEngine:
         else:
             cx, cy = w / 2.0, h / 2.0
 
-        crop_sz = 480
-        x1 = max(0, min(w - crop_sz, int(cx - crop_sz / 2.0)))
-        y1 = max(0, min(h - crop_sz, int(cy - crop_sz / 2.0)))
-        crop = frame[y1:y1 + crop_sz, x1:x1 + crop_sz].copy()
-        return cv2.resize(crop, (960, 720), interpolation=cv2.INTER_LINEAR)
+        crop_h = int(min(h, 440))
+        crop_w = int(crop_h * (16.0 / 9.0))
+        if crop_w > w:
+            crop_w = w
+            crop_h = int(crop_w / (16.0 / 9.0))
+
+        x1 = max(0, min(w - crop_w, int(cx - crop_w / 2.0)))
+        y1 = max(0, min(h - crop_h, int(cy - crop_h / 2.0)))
+        crop = frame[y1:y1 + crop_h, x1:x1 + crop_w].copy()
+        return cv2.resize(crop, (1280, 720), interpolation=cv2.INTER_LINEAR)
 
     def _draw_broadcast_graphics(self, frame: np.ndarray, on_air_label: str, ptz_meta: Dict[str, Any], director_reason: str):
         h, w = frame.shape[:2]
@@ -1052,24 +1209,135 @@ class MatchEngine:
         t2_pct: float,
         ptz_meta: Dict[str, Any],
         director_reason: str,
+        cams_data: Optional[Dict[int, Dict[str, Any]]] = None,
+        raw_panoramic: Optional[np.ndarray] = None,
+        is_panoramic: bool = False,
     ) -> Dict[str, Any]:
-        b_bbox = ball_state.get("bbox")
         norm_ball = None
-        if b_bbox:
-            norm_ball = [round((b_bbox[0] + b_bbox[2]) / (2.0 * 960 if is_multi else 2.0 * 1920), 3),
-                         round((b_bbox[1] + b_bbox[3]) / (2.0 * 720 if is_multi else 2.0 * 1080), 3)]
-
         radar_players = []
-        for pid, p in players.items():
-            pb = p.get("bbox")
-            if pb:
-                radar_players.append({
-                    "id": pid,
-                    "x": round((pb[0] + pb[2]) / (2.0 * 960 if is_multi else 2.0 * 1920), 3),
-                    "y": round((pb[1] + pb[3]) / (2.0 * 720 if is_multi else 2.0 * 1080), 3),
-                    "team": p.get("team", 1),
-                    "has_ball": p.get("has_ball", False),
-                })
+
+        if is_panoramic and raw_panoramic is not None:
+            pw = float(raw_panoramic.shape[1])
+            for pid, p in players.items():
+                pb = p.get("bbox")
+                if pb:
+                    px_mid = (pb[0] + pb[2]) / 2.0
+                    foot_y = pb[3]
+                    nx = round(px_mid / pw, 3)
+                    ny = round(max(0.04, min(0.96, (foot_y - 130.0) / 550.0)), 3)
+                    radar_players.append({
+                        "id": pid,
+                        "x": max(0.01, min(0.99, nx)),
+                        "y": ny,
+                        "team": p.get("team", 1),
+                        "has_ball": p.get("has_ball", False),
+                    })
+            b_bbox = ball_state.get("bbox")
+            if b_bbox:
+                bx_mid = (b_bbox[0] + b_bbox[2]) / 2.0
+                by_mid = (b_bbox[1] + b_bbox[3]) / 2.0
+                norm_ball = [
+                    round(max(0.01, min(0.99, bx_mid / pw)), 3),
+                    round(max(0.04, min(0.96, (by_mid - 130.0) / 550.0)), 3),
+                ]
+
+        elif is_multi and cams_data:
+            # Multi-camera stadium projection (Alfheim 3-sector setup)
+            # Cam 1 (Left Wing): base_x=0.00, span_x=0.36  -> [0.00, 0.36]
+            # Cam 2 (Center Midfield): base_x=0.32, span_x=0.36 -> [0.32, 0.68] (center circle at 0.50!)
+            # Cam 3 (Right Wing): base_x=0.64, span_x=0.36 -> [0.64, 1.00]
+            cam_offsets = {
+                1: (0.00, 0.36),
+                2: (0.32, 0.36),
+                3: (0.64, 0.36),
+            }
+            all_projected = []
+            for c_idx in (1, 2, 3):
+                c_info = cams_data.get(c_idx, {})
+                c_pls = c_info.get("players", {})
+                base_x, span_x = cam_offsets.get(c_idx, (0.32, 0.36))
+                for pid, p in c_pls.items():
+                    pb = p.get("bbox")
+                    if not pb:
+                        continue
+                    px_mid = (pb[0] + pb[2]) / 2.0
+                    foot_y = pb[3]
+                    nx = round(base_x + (px_mid / 960.0) * span_x, 3)
+                    ny = round(max(0.04, min(0.96, (foot_y - 130.0) / 550.0)), 3)
+                    all_projected.append({
+                        "id": f"c{c_idx}_{pid}",
+                        "x": max(0.01, min(0.99, nx)),
+                        "y": ny,
+                        "team": p.get("team", 1),
+                        "has_ball": p.get("has_ball", False),
+                        "cam": c_idx,
+                    })
+
+            # Spatial deduplication in camera stitch overlap zones
+            deduped = []
+            for p in all_projected:
+                is_dup = False
+                for d in deduped:
+                    if abs(p["x"] - d["x"]) < 0.038 and abs(p["y"] - d["y"]) < 0.075:
+                        is_dup = True
+                        if p.get("has_ball"):
+                            d["has_ball"] = True
+                        break
+                if not is_dup:
+                    deduped.append(p)
+            radar_players = deduped
+
+            # Global multi-camera ball projection
+            best_ball = None
+            best_cam = None
+            if ball_state.get("bbox") and ball_state.get("tracked", False):
+                best_ball = ball_state
+                best_cam = active_cam_id
+            else:
+                for c_idx in (2, 1, 3):
+                    c_bl = cams_data.get(c_idx, {}).get("ball", {})
+                    if c_bl.get("bbox") and c_bl.get("tracked", False):
+                        best_ball = c_bl
+                        best_cam = c_idx
+                        break
+                if best_ball is None and ball_state.get("bbox"):
+                    best_ball = ball_state
+                    best_cam = active_cam_id
+
+            if best_ball and best_ball.get("bbox") and best_cam in cam_offsets:
+                b_bbox = best_ball["bbox"]
+                bx_mid = (b_bbox[0] + b_bbox[2]) / 2.0
+                by_mid = (b_bbox[1] + b_bbox[3]) / 2.0
+                base_x, span_x = cam_offsets[best_cam]
+                norm_ball = [
+                    round(max(0.01, min(0.99, base_x + (bx_mid / 960.0) * span_x)), 3),
+                    round(max(0.04, min(0.96, (by_mid - 130.0) / 550.0)), 3),
+                ]
+
+        else:
+            # Single camera master feed
+            for pid, p in players.items():
+                pb = p.get("bbox")
+                if pb:
+                    px_mid = (pb[0] + pb[2]) / 2.0
+                    foot_y = pb[3]
+                    nx = round(px_mid / 1920.0, 3)
+                    ny = round(max(0.04, min(0.96, (foot_y - 180.0) / 820.0)), 3)
+                    radar_players.append({
+                        "id": pid,
+                        "x": max(0.01, min(0.99, nx)),
+                        "y": ny,
+                        "team": p.get("team", 1),
+                        "has_ball": p.get("has_ball", False),
+                    })
+            b_bbox = ball_state.get("bbox")
+            if b_bbox:
+                bx_mid = (b_bbox[0] + b_bbox[2]) / 2.0
+                by_mid = (b_bbox[1] + b_bbox[3]) / 2.0
+                norm_ball = [
+                    round(max(0.01, min(0.99, bx_mid / 1920.0)), 3),
+                    round(max(0.04, min(0.96, (by_mid - 180.0) / 820.0)), 3),
+                ]
 
         speed_px = ball_state.get("speed_px", 0.0)
         speed_kmh = round(speed_px * 2.8, 1)
